@@ -1,0 +1,39 @@
+[package]
+name = "assignment1"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.38.1", features = ["full"] }
+async-trait = "0.1.81"
+futures = "0.3.30"
+regex = "1.10.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_cbor = "0.10"
+ratatui = "0.28.0"
+indoc = "2"
+itertools = "0.13.0"
+log = "0.4"
+simplelog = "0.12"
+lazy_static = "1.4"
+text-to-ascii-art = "0.1.10"
+
+
+[dependencies.libp2p]
+version = "0.53.2"
+features = [
+    "tokio",
+    "gossipsub",
+    "noise",
+    "macros",
+    "tcp",
+    "quic",
+    "yamux",
+    "rendezvous",
+    "ping",
+    "identify",
+    "kad",
+    "mdns",
+    "cbor",
+    "request-response",
+]
