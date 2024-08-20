@@ -1,5 +1,0 @@
-04:44:15 [INFO] Node connected to /ip4/127.0.0.1/tcp/60515
-04:44:15 [INFO] Node connected to /ip4/10.196.16.189/tcp/60515
-04:44:16 [INFO] Creating new record with peer_id: "12D3KooWNAGiArRfPtAFBmVQpgw5yfwLZRYhc2FJ9Z68ZobfYPdf" and nickname: "Tom"
-04:44:16 [ERROR] Failed to put record: QuorumFailed { key: Key(b"12D3KooWNAGiArRfPtAFBmVQpgw5yfwLZRYhc2FJ9Z68ZobfYPdf"), success: [], quorum: 1 }
-04:44:21 [ERROR] Unhandled error: InsufficientPeers
