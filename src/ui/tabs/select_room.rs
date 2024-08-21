@@ -1,24 +1,29 @@
 use crate::network::Client;
-use crate::ui::cursor::Cursor;
+use libp2p::gossipsub::IdentTopic;
 use ratatui::{
     crossterm::event::{KeyCode, KeyEvent},
     prelude::*,
     widgets::*,
 };
-
-use crate::logger;
 use std::error::Error;
 
 use crate::state::APP;
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct SelectRoom {
-    rooms: Vec<String>,
-    selected_room: usize,
+    list_state: ListState,
+}
+
+impl Default for SelectRoom {
+    fn default() -> Self {
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
+        Self { list_state }
+    }
 }
 
 impl SelectRoom {
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render(&mut self, frame: &mut Frame, area: Rect) {
         let block = Block::default()
             .title(
                 block::Title::from(Span::styled(
@@ -33,7 +38,25 @@ impl SelectRoom {
             .borders(Borders::ALL)
             .style(Style::default());
 
-        frame.render_widget(block, area)
+        let app = APP.lock().unwrap();
+        let rooms = app.rooms.clone();
+        drop(app);
+
+        let layout = Layout::default()
+            .constraints([Constraint::Percentage(100)].as_ref())
+            .split(area);
+
+        let items: Vec<ListItem> = rooms
+            .iter()
+            .map(|room| ListItem::new(room.as_str()))
+            .collect();
+
+        let list = List::new(items)
+            .block(block)
+            .highlight_style(Style::default().fg(Color::Yellow))
+            .highlight_symbol(">> ");
+
+        frame.render_stateful_widget(list, layout[0], &mut self.list_state);
     }
 
     pub(crate) async fn handle_events(
@@ -41,6 +64,30 @@ impl SelectRoom {
         key: KeyEvent,
         client: &mut Client,
     ) -> Result<(), Box<dyn Error>> {
+        match key.code {
+            // Changing room
+            KeyCode::Up => {
+                self.list_state.select_previous();
+            }
+
+            KeyCode::Down => {
+                self.list_state.select_next();
+            }
+            // Confirm room change
+            KeyCode::Enter => {
+                let selected_room_index = match self.list_state.selected() {
+                    Some(room) => room,
+                    None => 0,
+                };
+
+                let mut app = APP.lock().unwrap();
+                let rooms = app.rooms.clone();
+                app.topic = IdentTopic::new(rooms[selected_room_index].to_string());
+                drop(app);
+            }
+            _ => {}
+        }
+
         Ok(())
     }
 }

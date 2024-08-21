@@ -1,5 +1,6 @@
 use crate::network::Client;
 use crate::ui::cursor::Cursor;
+use libp2p::gossipsub::Message;
 use ratatui::{
     crossterm::event::{KeyCode, KeyEvent},
     prelude::*,
@@ -9,7 +10,7 @@ use ratatui::{
 use crate::logger;
 use std::error::Error;
 
-use crate::state::APP;
+use crate::state::{MessageType, APP};
 
 #[derive(Default)]
 pub struct Room {
@@ -26,31 +27,16 @@ impl Room {
 
         // RENDER MESSAGES
         let app = APP.lock().unwrap();
-        let chat_messages = app.messages.clone();
+        let chat_messages = app.get_messages();
         let topic = app.topic.clone().to_string();
         let nickname = app.nickname.clone();
         drop(app);
 
-        let nickname_message = Span::styled(
-            format!("Logged in as {}", nickname),
-            Style::default()
-                .add_modifier(Modifier::ITALIC)
-                .fg(Color::Yellow),
-        );
-        let joined_room_message = Span::styled(
-            format!("Joined chat room: {}", topic),
-            Style::default()
-                .add_modifier(Modifier::ITALIC)
-                .fg(Color::Yellow),
-        );
         let mut lines = vec![];
-        lines.push(Line::from(nickname_message));
-        lines.push(Line::from(joined_room_message));
-        lines.push(Line::from(Span::raw("\n")));
 
         // Add the chat messages
-        for message in &chat_messages {
-            lines.push(Line::from(Span::raw(message)))
+        for (message_type, message) in &chat_messages {
+            lines.push(self.get_styled_line(message_type.clone(), message.clone()));
         }
 
         let messages_content = Text::from(lines);
@@ -120,6 +106,29 @@ impl Room {
         });
     }
 
+    pub fn get_styled_line(&self, message_type: MessageType, message: String) -> Line {
+        match message_type {
+            MessageType::Message => Line::from(Span::raw(message)),
+            MessageType::Info => Line::from(Span::styled(
+                message,
+                Style::default()
+                    .add_modifier(Modifier::ITALIC)
+                    .fg(Color::Yellow),
+            )),
+            MessageType::Error => Line::from(Span::styled(
+                message,
+                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+            )),
+            MessageType::Help => Line::from(Span::styled(
+                message,
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::ITALIC)
+                    .fg(Color::Cyan),
+            )),
+        }
+    }
+
     pub(crate) async fn handle_events(
         &mut self,
         key: KeyEvent,
@@ -161,12 +170,6 @@ impl Room {
             KeyCode::Backspace => {
                 self.delete_char();
             }
-            // Closing the application
-            KeyCode::Esc => {
-                let mut app = APP.lock().unwrap();
-                app.quitting = true;
-                drop(app);
-            }
             _ => {}
         }
         Ok(())
@@ -180,8 +183,7 @@ impl Room {
 
         let message = self.input.clone();
         let nickname_message = format!("{}: {}", nickname, self.input.clone());
-
-        app.messages.push(nickname_message.clone());
+        app.add_message(MessageType::Message, nickname_message);
         drop(app);
 
         // Only want to publish the message, not including the nickname

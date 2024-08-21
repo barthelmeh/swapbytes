@@ -8,6 +8,7 @@ use ratatui::{
     prelude::*,
     widgets::*,
 };
+use std::cmp::Ordering;
 use std::error::Error;
 
 #[derive(Default)]
@@ -59,8 +60,8 @@ impl LoginScreen {
 
         // Error message
         let app = APP.lock().unwrap();
-        let error_message = match app.num_connected_peers {
-            0 => "No connected peers",
+        let error_message = match app.num_connected_peers.cmp(&1) {
+            Ordering::Less => "No connected peers",
             _ => "",
         };
         drop(app);
@@ -113,7 +114,7 @@ impl LoginScreen {
                         // Submit nickname
                         KeyCode::Enter => {
                             let app = APP.lock().unwrap();
-                            if app.num_connected_peers == 0 {
+                            if app.num_connected_peers <= 0 {
                                 return Ok(());
                             }
                             drop(app);
@@ -185,12 +186,15 @@ impl LoginScreen {
 
         app.nickname = nickname.clone();
         app.screen = Screen::Chat;
-        drop(app);
 
         // Add the nickname to the network
         if let Some(peer_id) = peer_id {
             client.add_nickname(nickname, peer_id).await?;
+            // Create the global room
+            app.add_room(&"Global".to_string(), client).await?;
         }
+
+        drop(app);
 
         self.input.clear();
         Ok(())

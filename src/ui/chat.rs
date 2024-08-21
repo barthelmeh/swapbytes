@@ -1,6 +1,8 @@
 use crate::network::Client;
 use crate::ui::tabs;
 
+use crate::APP;
+
 use strum::{Display, EnumIter, FromRepr, IntoEnumIterator};
 
 use ratatui::{
@@ -69,6 +71,12 @@ impl ChatScreen {
                         KeyCode::Tab => {
                             self.selected_tab = self.selected_tab.next_tab();
                         }
+                        // Closing the application
+                        KeyCode::Esc => {
+                            let mut app = APP.lock().unwrap();
+                            app.quitting = true;
+                            drop(app);
+                        }
                         // Handle events on each tab
                         _ => match self.selected_tab {
                             SelectedTab::Chat => self.chat.handle_events(key, client).await?,
@@ -88,7 +96,7 @@ impl ChatScreen {
 }
 
 #[derive(Default, Clone, Copy, Display, FromRepr, EnumIter)]
-enum SelectedTab {
+pub enum SelectedTab {
     #[default]
     #[strum(to_string = "Chat")]
     Chat,

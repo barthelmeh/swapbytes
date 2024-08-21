@@ -1,9 +1,10 @@
 use futures::channel::{mpsc, oneshot};
 use futures::prelude::*;
 use futures::StreamExt;
+use libp2p::gossipsub::IdentTopic;
 
 use crate::logger;
-use crate::state::APP;
+use crate::state::{MessageType, APP};
 
 use libp2p::{
     core::Multiaddr,
@@ -62,13 +63,9 @@ pub(crate) async fn new() -> Result<(Client, impl Stream<Item = Event>, EventLoo
         .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
         .build();
 
-    // Subscribe gossipsub to a topic
-    let topic = gossipsub::IdentTopic::new("global");
-    swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
-    // Set the topic globally
     let mut app = APP.lock().unwrap();
-    app.topic = topic;
     app.peer_id = Some(peer_id);
+    let topic = app.topic.clone();
     drop(app);
 
     // Setup kademlia
@@ -90,6 +87,10 @@ pub(crate) async fn new() -> Result<(Client, impl Stream<Item = Event>, EventLoo
 enum Command {
     StartListening {
         addr: Multiaddr,
+        sender: oneshot::Sender<Result<(), Box<dyn Error + Send>>>,
+    },
+    ChangeTopic {
+        topic: String,
         sender: oneshot::Sender<Result<(), Box<dyn Error + Send>>>,
     },
     SendTopicMessage {
@@ -116,6 +117,18 @@ impl Client {
         let (sender, receiver) = oneshot::channel();
         self.sender
             .send(Command::StartListening { addr, sender })
+            .await
+            .expect("Command receiver not to be dropped.");
+        receiver.await.expect("Sender not to be dropped.")
+    }
+
+    pub(crate) async fn change_topic(
+        &mut self,
+        topic: String,
+    ) -> Result<(), Box<dyn Error + Send>> {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::ChangeTopic { topic, sender })
             .await
             .expect("Command receiver not to be dropped.");
         receiver.await.expect("Sender not to be dropped.")
@@ -263,7 +276,7 @@ impl EventLoop {
 
                 match nicknames.get(&peer_id) {
                     Some(nickname) => {
-                        app.messages.push(format!("{nickname}: {}", message));
+                        app.add_message(MessageType::Message, format!("{nickname}: {}", message));
                         logger::info!("{nickname}: {}", message);
                     }
                     None => {
@@ -302,9 +315,9 @@ impl EventLoop {
                             let formatted_message = format!("{}: {}", nickname, message);
 
                             let mut app = APP.lock().unwrap();
-
-                            app.messages.push(formatted_message.clone());
                             logger::info!("{}", formatted_message);
+
+                            app.add_message(MessageType::Message, formatted_message);
 
                             drop(app);
                         } else {
@@ -336,6 +349,13 @@ impl EventLoop {
         match command {
             Command::StartListening { addr, sender } => {
                 let _ = match self.swarm.listen_on(addr) {
+                    Ok(_) => sender.send(Ok(())),
+                    Err(e) => sender.send(Err(Box::new(e))),
+                };
+            }
+            Command::ChangeTopic { topic, sender } => {
+                let topic = IdentTopic::new(topic.clone());
+                let _ = match self.swarm.behaviour_mut().gossipsub.subscribe(&topic) {
                     Ok(_) => sender.send(Ok(())),
                     Err(e) => sender.send(Err(Box::new(e))),
                 };
