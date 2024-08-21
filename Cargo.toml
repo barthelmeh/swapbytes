@@ -11,12 +11,11 @@ regex = "1.10.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_cbor = "0.10"
 ratatui = "0.28.0"
-indoc = "2"
-itertools = "0.13.0"
 log = "0.4"
 simplelog = "0.12"
 lazy_static = "1.4"
 text-to-ascii-art = "0.1.10"
+strum = "0.26.3"
 
 
 [dependencies.libp2p]

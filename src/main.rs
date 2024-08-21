@@ -1,16 +1,14 @@
-mod chat;
-mod cursor;
-mod logger;
-mod login;
+pub mod logger;
 mod network;
-mod state;
-mod tui;
+pub mod state;
+pub mod ui;
 
-use chat::ChatScreen;
-use login::LoginScreen;
 use state::APP;
 use std::error::Error;
 use tokio::task::spawn;
+use ui::chat::ChatScreen;
+use ui::login::LoginScreen;
+use ui::tui;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {

@@ -1,27 +1,28 @@
-use crate::cursor::Cursor;
-use crate::logger;
 use crate::network::Client;
-use crate::state::APP;
-
+use crate::ui::cursor::Cursor;
 use ratatui::{
-    crossterm::event::{self, Event, KeyCode, KeyEventKind},
+    crossterm::event::{KeyCode, KeyEvent},
     prelude::*,
     widgets::*,
 };
+
+use crate::logger;
 use std::error::Error;
 
+use crate::state::APP;
+
 #[derive(Default)]
-pub struct ChatScreen {
-    input: String,
-    vertical_scroll: usize,
-    vertical_scroll_state: ScrollbarState,
-    cursor: Cursor,
+pub struct Room {
+    pub input: String,
+    pub vertical_scroll: usize,
+    pub vertical_scroll_state: ScrollbarState,
+    pub cursor: Cursor,
 }
 
-impl ChatScreen {
-    pub fn render(&mut self, frame: &mut Frame) {
+impl Room {
+    pub fn render(&mut self, frame: &mut Frame, area: Rect) {
         let vertical = Layout::vertical([Constraint::Min(1), Constraint::Length(3)]);
-        let [messages_area, input_area] = vertical.areas(frame.area());
+        let [messages_area, input_area] = vertical.areas(area);
 
         // RENDER MESSAGES
         let app = APP.lock().unwrap();
@@ -30,16 +31,27 @@ impl ChatScreen {
         let nickname = app.nickname.clone();
         drop(app);
 
+        let nickname_message = Span::styled(
+            format!("Logged in as {}", nickname),
+            Style::default()
+                .add_modifier(Modifier::ITALIC)
+                .fg(Color::Yellow),
+        );
         let joined_room_message = Span::styled(
             format!("Joined chat room: {}", topic),
             Style::default()
                 .add_modifier(Modifier::ITALIC)
-                .fg(Color::LightYellow),
+                .fg(Color::Yellow),
         );
         let mut lines = vec![];
+        lines.push(Line::from(nickname_message));
         lines.push(Line::from(joined_room_message));
         lines.push(Line::from(Span::raw("\n")));
-        lines.push(Line::from(Span::raw(chat_messages.join("\n"))));
+
+        // Add the chat messages
+        for message in &chat_messages {
+            lines.push(Line::from(Span::raw(message)))
+        }
 
         let messages_content = Text::from(lines);
 
@@ -48,7 +60,7 @@ impl ChatScreen {
                 Block::bordered()
                     .title(
                         block::Title::from(Span::styled(
-                            ("SwapBytes"),
+                            "SwapBytes",
                             Style::default()
                                 .add_modifier(Modifier::BOLD)
                                 .fg(Color::Yellow),
@@ -63,7 +75,8 @@ impl ChatScreen {
                                 .add_modifier(Modifier::ITALIC)
                                 .fg(Color::LightYellow),
                         ))
-                        .alignment(Alignment::Right),
+                        .alignment(Alignment::Right)
+                        .position(block::Position::Bottom),
                     ),
             )
             .scroll((self.vertical_scroll as u16, 0));
@@ -107,57 +120,54 @@ impl ChatScreen {
         });
     }
 
-    pub async fn handle_events(&mut self, client: &mut Client) -> Result<(), Box<dyn Error>> {
-        // Handle events for the chat screen
-        if event::poll(std::time::Duration::from_millis(16))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        // User input
-                        KeyCode::Char(c) => {
-                            self.enter_char(c);
-                        }
-                        // Submit messages
-                        KeyCode::Enter => {
-                            let _ = match self.submit_message(client).await {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    logger::error!("Unhandled error: {:?}", e);
-                                }
-                            };
-                        }
-                        // Scrolling
-                        KeyCode::Up => {
-                            self.vertical_scroll = self.vertical_scroll.saturating_sub(1);
-                            self.vertical_scroll_state =
-                                self.vertical_scroll_state.position(self.vertical_scroll);
-                        }
-                        KeyCode::Down => {
-                            self.vertical_scroll = self.vertical_scroll.saturating_add(1);
-                            self.vertical_scroll_state =
-                                self.vertical_scroll_state.position(self.vertical_scroll);
-                        }
-                        // Moving the cursor
-                        KeyCode::Left => {
-                            self.cursor.move_cursor_left(self.input.chars().count());
-                        }
-                        KeyCode::Right => {
-                            self.cursor.move_cursor_right(self.input.chars().count());
-                        }
-                        // Deleting Characters
-                        KeyCode::Backspace => {
-                            self.delete_char();
-                        }
-                        // Closing the application
-                        KeyCode::Esc => {
-                            let mut app = APP.lock().unwrap();
-                            app.quitting = true;
-                            drop(app);
-                        }
-                        _ => {}
-                    }
-                }
+    pub(crate) async fn handle_events(
+        &mut self,
+        key: KeyEvent,
+        client: &mut Client,
+    ) -> Result<(), Box<dyn Error>> {
+        match key.code {
+            // User input
+            KeyCode::Char(c) => {
+                self.enter_char(c);
             }
+            // Submit messages
+            KeyCode::Enter => {
+                let _ = match self.submit_message(client).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        logger::error!("Unhandled error: {:?}", e);
+                    }
+                };
+            }
+            // Scrolling
+            KeyCode::Up => {
+                self.vertical_scroll = self.vertical_scroll.saturating_sub(1);
+                self.vertical_scroll_state =
+                    self.vertical_scroll_state.position(self.vertical_scroll);
+            }
+            KeyCode::Down => {
+                self.vertical_scroll = self.vertical_scroll.saturating_add(1);
+                self.vertical_scroll_state =
+                    self.vertical_scroll_state.position(self.vertical_scroll);
+            }
+            // Moving the cursor
+            KeyCode::Left => {
+                self.cursor.move_cursor_left(self.input.chars().count());
+            }
+            KeyCode::Right => {
+                self.cursor.move_cursor_right(self.input.chars().count());
+            }
+            // Deleting Characters
+            KeyCode::Backspace => {
+                self.delete_char();
+            }
+            // Closing the application
+            KeyCode::Esc => {
+                let mut app = APP.lock().unwrap();
+                app.quitting = true;
+                drop(app);
+            }
+            _ => {}
         }
         Ok(())
     }

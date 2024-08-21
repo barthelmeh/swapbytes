@@ -1,10 +1,8 @@
-use crate::cursor::Cursor;
 use crate::logger;
 use crate::network::Client;
 use crate::state::{Screen, APP};
+use crate::ui::cursor::Cursor;
 
-use indoc::indoc;
-use itertools::izip;
 use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEventKind},
     prelude::*,
@@ -23,9 +21,10 @@ impl LoginScreen {
         let vertical = Layout::vertical([
             Constraint::Length(8),
             Constraint::Min(1),
+            Constraint::Length(2),
             Constraint::Length(3),
         ]);
-        let [logo_area, nickname_area, input_area] = vertical.areas(frame.area());
+        let [logo_area, nickname_area, error_area, input_area] = vertical.areas(frame.area());
 
         // Determine the font based on the available width and height
         let font = if logo_area.width < 85 {
@@ -50,7 +49,6 @@ impl LoginScreen {
 
         frame.render_widget(logo_paragraph, logo_area);
 
-        // Add a bold "Choose a nickname" text below the logo
         let nickname_paragraph = Paragraph::new("A p2p platform for file sharing")
             .block(Block::default())
             .style(Style::default().add_modifier(Modifier::ITALIC))
@@ -58,6 +56,21 @@ impl LoginScreen {
 
         // Render the nickname text below the logo
         frame.render_widget(nickname_paragraph, nickname_area);
+
+        // Error message
+        let app = APP.lock().unwrap();
+        let error_message = match app.num_connected_peers {
+            0 => "No connected peers",
+            _ => "",
+        };
+        drop(app);
+
+        let error_paragraph = Paragraph::new(error_message)
+            .block(Block::default())
+            .style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Red))
+            .alignment(Alignment::Center); // Center the error message
+
+        frame.render_widget(error_paragraph, error_area);
 
         // Input box
         let input = Paragraph::new(self.input.as_str())
@@ -85,7 +98,10 @@ impl LoginScreen {
         });
     }
 
-    pub async fn handle_events(&mut self, client: &mut Client) -> Result<(), Box<dyn Error>> {
+    pub(crate) async fn handle_events(
+        &mut self,
+        client: &mut Client,
+    ) -> Result<(), Box<dyn Error>> {
         if let Ok(true) = ratatui::crossterm::event::poll(std::time::Duration::from_millis(16)) {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
@@ -96,6 +112,12 @@ impl LoginScreen {
                         }
                         // Submit nickname
                         KeyCode::Enter => {
+                            let app = APP.lock().unwrap();
+                            if app.num_connected_peers == 0 {
+                                return Ok(());
+                            }
+                            drop(app);
+
                             let _ = match self.submit(client).await {
                                 Ok(_) => {}
                                 Err(e) => {
