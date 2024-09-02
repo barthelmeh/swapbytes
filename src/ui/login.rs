@@ -154,8 +154,10 @@ impl LoginScreen {
 
     fn enter_char(&mut self, new_char: char) {
         let index = self.byte_index();
-        self.input.insert(index, new_char);
-        self.cursor.move_cursor_right(self.input.chars().count());
+        if new_char != ' ' {
+            self.input.insert(index, new_char);
+            self.cursor.move_cursor_right(self.input.chars().count());
+        }
     }
 
     fn delete_char(&mut self) {

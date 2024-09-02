@@ -69,6 +69,16 @@ impl ChatScreen {
                     match key.code {
                         // Navigating tabs
                         KeyCode::Tab => {
+                            // If navigating to select_room, fetch rooms
+                            match self.selected_tab {
+                                SelectedTab::Chat => {
+                                    let app = APP.lock().unwrap();
+                                    app.fetch_rooms(client).await.unwrap();
+                                    drop(app);
+                                }
+                                _ => {}
+                            }
+
                             self.selected_tab = self.selected_tab.next_tab();
                         }
                         // Closing the application
@@ -81,7 +91,9 @@ impl ChatScreen {
                         _ => match self.selected_tab {
                             SelectedTab::Chat => self.chat.handle_events(key, client).await?,
                             SelectedTab::SelectRoom => {
-                                self.select_room.handle_events(key, client).await?
+                                self.select_room
+                                    .handle_events(key, client, &mut self.selected_tab)
+                                    .await?
                             }
                             SelectedTab::DirectMessage => {
                                 self.direct_messaging.handle_events(key, client).await?;

@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     logger::initialize();
 
     // Setup the network loop
-    let (mut network_client, mut network_events, network_event_loop) = network::new().await?;
+    let (mut network_client, network_event_loop) = network::new().await?;
 
     // Run it in the background
     spawn(network_event_loop.run());

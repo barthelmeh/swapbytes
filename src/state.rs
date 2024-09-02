@@ -1,9 +1,10 @@
-use crate::{logger, network::Client};
+use crate::{logger, network::Client, network::RequestType};
 use lazy_static::lazy_static;
 use libp2p::{gossipsub::IdentTopic, PeerId};
 use std::{
     collections::HashMap,
     error::Error,
+    io,
     sync::{Arc, Mutex},
 };
 
@@ -18,6 +19,10 @@ pub struct App {
     pub peer_id: Option<PeerId>,
     pub nicknames: HashMap<PeerId, String>,
     pub rooms: Vec<String>,
+    pub private_messages: Vec<(MessageType, String)>,
+    pub connected_peer: Option<PeerId>,
+    pub connected: bool,
+    pub requested_file: Option<String>,
 }
 
 #[derive(Clone)]
@@ -47,22 +52,39 @@ impl App {
             topic: IdentTopic::new(""),
             rooms: vec![],
             peer_id: None,
+            private_messages: vec![],
+            connected_peer: None,
+            connected: false,
+            requested_file: None,
         }
     }
 
-    pub fn add_message(&mut self, message_type: MessageType, message: String) {
-        match self.messages.get_mut(&self.topic.to_string()) {
-            Some(messages) => messages.push((message_type, message.clone())),
-            None => {
-                logger::error!(
-                    "Unable to push message for topic: {:?}",
-                    self.topic.to_string()
-                );
-            }
-        };
+    pub fn add_message(
+        &mut self,
+        message_type: MessageType,
+        message: String,
+        topic: Option<&String>,
+    ) {
+        if topic.is_some() {
+            match self.messages.get_mut(topic.unwrap()) {
+                Some(messages) => messages.push((message_type, message.clone())),
+                None => {
+                    logger::error!(
+                        "Unable to push message for topic: {:?}",
+                        self.topic.to_string()
+                    );
+                }
+            };
+        } else {
+            self.private_messages.push((message_type, message.clone()));
+        }
     }
 
     pub fn get_messages(&self) -> Vec<(MessageType, String)> {
+        if self.connected {
+            return self.private_messages.clone();
+        }
+
         return match self.messages.get(&self.topic.to_string()) {
             Some(messages) => messages.clone(),
             None => {
@@ -81,19 +103,208 @@ impl App {
         client: &mut Client,
     ) -> Result<(), Box<dyn Error + Send>> {
         // Adds a new room, sets the current topic to the new room, and adds join message
-        self.messages.insert(room.clone(), Vec::new());
-        self.topic = IdentTopic::new(room.clone());
+
+        // Add the room to the DHT
+        if self.rooms.contains(&room.clone()) {
+            return Err(Box::new(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Room already exists",
+            )));
+        }
         self.rooms.push(room.clone());
+        client.add_room(self.rooms.clone()).await?;
 
         // Get the client to subscribe to the new topic
         client.change_topic(room.clone()).await?;
 
+        // Join the room
+        self.join_room(room, client).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn join_room(
+        &mut self,
+        room: &String,
+        client: &mut Client,
+    ) -> Result<(), Box<dyn Error + Send>> {
+        // Subscribe to the new topic
+        if self.topic.to_string() == *room {
+            return Ok(());
+        }
+        self.topic = IdentTopic::new(room.clone());
+
+        match self.messages.get(&room.clone()) {
+            Some(_) => {}
+            None => {
+                // Insert into messages if doesn't exist
+                self.messages.insert(room.clone(), Vec::new());
+                self.add_message(
+                    MessageType::Info,
+                    format!("Logged in as: {}", self.nickname),
+                    Some(&self.topic.clone().to_string()),
+                );
+                self.add_message(
+                    MessageType::Info,
+                    format!("Joined chat room: {room}"),
+                    Some(&self.topic.clone().to_string()),
+                );
+                self.add_message(
+                    MessageType::Help,
+                    "Type \"/help\" to view all available commands".to_string(),
+                    Some(&self.topic.clone().to_string()),
+                );
+                self.add_message(
+                    MessageType::Message,
+                    "".to_string(),
+                    Some(&self.topic.clone().to_string()),
+                );
+            }
+        };
+
+        client.change_topic(room.clone()).await?;
+
+        Ok(())
+    }
+
+    pub(crate) async fn fetch_rooms(
+        &self,
+        client: &mut Client,
+    ) -> Result<(), Box<dyn Error + Send>> {
+        client.fetch_rooms().await?;
+        Ok(())
+    }
+
+    pub(crate) async fn connect(
+        &mut self,
+        nickname: String,
+        client: &mut Client,
+    ) -> Result<(), Box<dyn Error + Send>> {
+        // Get peerId from nickname
+        let peer_id = self.nicknames.iter().find_map(|(peer_id, nick)| {
+            if nick == &nickname {
+                Some(peer_id)
+            } else {
+                None
+            }
+        });
+
+        // If the peer_id is not found, return an error
+        if peer_id.is_none() {
+            logger::error!(
+                "Peer ID not found for connection with nickname {}",
+                nickname
+            );
+            return Err(Box::new(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("Peer ID not found for nickname: {}", nickname),
+            )));
+        }
+
+        let peer_id = peer_id.unwrap();
+        self.connected_peer = Some(*peer_id);
+        client
+            .send_request(*peer_id, RequestType::Join, None, None)
+            .await?;
+        let topic = self.topic.clone();
         self.add_message(
             MessageType::Info,
-            format!("Logged in as: {}", self.nickname),
+            format! {"Connection sent to {}", nickname},
+            Some(&topic.to_string()),
         );
-        self.add_message(MessageType::Info, format!("Joined chat room: {room}"));
-        self.add_message(MessageType::Message, "".to_string());
+        Ok(())
+    }
+
+    pub(crate) async fn accept_connection(
+        &mut self,
+        client: &mut Client,
+    ) -> Result<(), Box<dyn Error + Send>> {
+        let topic = self.topic.clone();
+        if self.connected_peer.is_some() {
+            client
+                .send_request(
+                    self.connected_peer.unwrap(),
+                    RequestType::Accept,
+                    None,
+                    None,
+                )
+                .await?;
+            self.join_private_dm();
+        } else {
+            self.add_message(
+                MessageType::Error,
+                "Unable to accept request as there is no incoming request.".to_string(),
+                Some(&topic.to_string()),
+            )
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn reject_connection(
+        &mut self,
+        client: &mut Client,
+    ) -> Result<(), Box<dyn Error + Send>> {
+        let topic = self.topic.clone();
+        if self.connected_peer.is_some() {
+            client
+                .send_request(
+                    self.connected_peer.unwrap(),
+                    RequestType::Reject,
+                    None,
+                    None,
+                )
+                .await?;
+            self.connected_peer = None;
+            self.connected = false;
+        } else {
+            self.add_message(
+                MessageType::Error,
+                "Unable to reject request as there is no incoming request.".to_string(),
+                Some(&topic.to_string()),
+            )
+        }
+        Ok(())
+    }
+
+    pub(crate) fn join_private_dm(&mut self) {
+        if self.connected_peer.is_none() {
+            return;
+        }
+        self.connected = true;
+        self.private_messages = Vec::new();
+
+        // Set the private messages
+        let peer_nickname = self.nicknames.get(&self.connected_peer.unwrap()).unwrap();
+        self.add_message(
+            MessageType::Info,
+            format!("Joined private message with {}", peer_nickname),
+            None,
+        );
+        self.add_message(
+            MessageType::Info,
+            format!("To leave the private message, type \"/leave\""),
+            None,
+        );
+    }
+
+    pub(crate) async fn leave_private_dm(
+        &mut self,
+        client: &mut Client,
+    ) -> Result<(), Box<dyn Error + Send>> {
+        if self.connected_peer.is_none() {
+            return Err(Box::new(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("No connected peer"),
+            )));
+        }
+
+        // Send a leave request
+        let peer_id = self.connected_peer.clone().unwrap();
+        let _ = client
+            .send_request(peer_id, RequestType::Leave, None, None)
+            .await;
+        self.connected = false;
+        self.connected_peer = None;
         Ok(())
     }
 }

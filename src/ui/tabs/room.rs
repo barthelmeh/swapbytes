@@ -1,6 +1,7 @@
 use crate::network::Client;
+use crate::network::RequestType;
 use crate::ui::cursor::Cursor;
-use libp2p::gossipsub::Message;
+
 use ratatui::{
     crossterm::event::{KeyCode, KeyEvent},
     prelude::*,
@@ -12,12 +13,56 @@ use std::error::Error;
 
 use crate::state::{MessageType, APP};
 
-#[derive(Default)]
 pub struct Room {
     pub input: String,
     pub vertical_scroll: usize,
     pub vertical_scroll_state: ScrollbarState,
     pub cursor: Cursor,
+    is_command: bool,
+    // (command, description)
+    commands: Vec<(String, String)>,
+}
+
+impl Default for Room {
+    fn default() -> Self {
+        Self {
+            input: String::default(),
+            vertical_scroll: usize::default(),
+            vertical_scroll_state: ScrollbarState::default(),
+            cursor: Cursor::default(),
+            is_command: false,
+            commands: vec![
+                (
+                    "/help".to_string(),
+                    "View a list of all available commands".to_string(),
+                ),
+                (
+                    "/create_room".to_string(),
+                    "Create a new room and join it. (e.g. /create_room COSC401)".to_string(),
+                ),
+                (
+                    "/list".to_string(),
+                    "List all known users that have sent a message".to_string(),
+                ),
+                (
+                    "/connect [nickname]".to_string(),
+                    "Invite a peer to share files and chat privately.".to_string(),
+                ),
+                (
+                    "/accept [nickname]".to_string(),
+                    "Accept an invitation to connect from a peer".to_string(),
+                ),
+                (
+                    "/reject [nickname]".to_string(),
+                    "Reject an invitation to connect from a peer".to_string(),
+                ),
+                (
+                    "/leave".to_string(),
+                    "Leave a private messaging session".to_string(),
+                ),
+            ],
+        }
+    }
 }
 
 impl Room {
@@ -28,8 +73,6 @@ impl Room {
         // RENDER MESSAGES
         let app = APP.lock().unwrap();
         let chat_messages = app.get_messages();
-        let topic = app.topic.clone().to_string();
-        let nickname = app.nickname.clone();
         drop(app);
 
         let mut lines = vec![];
@@ -81,8 +124,15 @@ impl Room {
         );
 
         // Render input box
+        let input_style = match self.is_command {
+            true => Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+            false => Style::default().fg(Color::Yellow),
+        };
+
         let input = Paragraph::new(self.input.as_str())
-            .style(Style::default().fg(Color::Yellow))
+            .style(input_style)
             .block(
                 Block::bordered()
                     .title(Span::styled(
@@ -141,12 +191,18 @@ impl Room {
             }
             // Submit messages
             KeyCode::Enter => {
-                let _ = match self.submit_message(client).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        logger::error!("Unhandled error: {:?}", e);
-                    }
-                };
+                // Check if it is a command:
+                if self.input.starts_with("/") {
+                    self.is_command = false;
+                    self.handle_commands(client).await;
+                } else {
+                    let _ = match self.submit_message(client).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            logger::error!("Unhandled error: {:?}", e);
+                        }
+                    };
+                }
             }
             // Scrolling
             KeyCode::Up => {
@@ -175,27 +231,263 @@ impl Room {
         Ok(())
     }
 
+    pub(crate) async fn handle_commands(&mut self, client: &mut Client) {
+        let args: Vec<&str> = remove_first(self.input.as_str())
+            .unwrap_or("")
+            .split(" ")
+            .collect();
+        let cmd = if let Some(cmd) = args.get(0) {
+            *cmd
+        } else {
+            self.handle_command_error(args.clone());
+            self.input.clear();
+            self.cursor.reset_cursor();
+            return;
+        };
+        logger::info!("Handling command: {cmd}");
+
+        // Handle all commands
+        match cmd {
+            "help" => {
+                let mut app = APP.lock().unwrap();
+                let topic_str = app.topic.clone().to_string();
+                let topic = match app.connected {
+                    true => None,
+                    false => Some(&topic_str),
+                };
+
+                app.add_message(MessageType::Message, "".to_string(), topic);
+                app.add_message(
+                    MessageType::Help,
+                    "All available commands:".to_string(),
+                    topic,
+                );
+                app.add_message(MessageType::Message, "".to_string(), topic);
+                for (cmd, description) in &self.commands {
+                    app.add_message(MessageType::Help, format!("{cmd}: {description}"), topic);
+                }
+                drop(app);
+            }
+            "create_room" => {
+                let mut app = APP.lock().unwrap();
+                let topic_str = app.topic.clone().to_string();
+
+                if args.len() < 2 || args[1].len() == 0 || app.connected {
+                    drop(app);
+                    self.handle_command_error(args.clone());
+                } else {
+                    let room = args[1];
+                    let _ = match app.add_room(&room.to_string(), client).await {
+                        Ok(_) => {}
+                        Err(_) => {
+                            app.add_message(
+                                MessageType::Error,
+                                format!("Unable to add room: {room}"),
+                                Some(&topic_str),
+                            );
+                        }
+                    };
+                    drop(app);
+                }
+            }
+            "list" => {
+                let mut app = APP.lock().unwrap();
+                if args.len() != 1 || app.connected {
+                    drop(app);
+                    self.handle_command_error(args.clone());
+                } else {
+                    let nicknames = app.nicknames.clone();
+                    let topic_str = app.topic.clone().to_string();
+                    let topic = match app.connected {
+                        false => Some(&topic_str),
+                        true => None,
+                    };
+                    app.add_message(MessageType::Info, "".to_string(), topic);
+                    if nicknames.is_empty() {
+                        app.add_message(
+                            MessageType::Info,
+                            "No users known. A user must first send a message to be known"
+                                .to_string(),
+                            topic,
+                        );
+                    } else {
+                        app.add_message(MessageType::Info, "All known users:".to_string(), topic);
+                        for nickname in nicknames.values() {
+                            app.add_message(MessageType::Info, nickname.clone(), topic);
+                        }
+                    }
+                    app.add_message(MessageType::Info, "".to_string(), topic);
+                    drop(app);
+                }
+            }
+            "connect" => {
+                let mut app = APP.lock().unwrap();
+
+                if args.len() < 2 || args[1].len() == 0 || app.connected {
+                    drop(app);
+                    self.handle_command_error(args.clone());
+                } else {
+                    let topic = app.topic.clone();
+                    if app.connected_peer.is_some() {
+                        let connected_peer_nickname = app.connected_peer.clone().unwrap();
+                        app.add_message(MessageType::Error, format!("You already have a DM request from {}. Type \"/accept\" to accept or \"/reject\" to reject the request.", connected_peer_nickname), Some(&topic.to_string()));
+                        drop(app);
+                        return;
+                    }
+
+                    // Send a join message to the peer
+                    let peer_nickname = args[1];
+                    let _ = match app.connect(peer_nickname.to_string(), client).await {
+                        Ok(_) => {}
+                        Err(_) => {
+                            app.add_message(
+                                MessageType::Error,
+                                format!("Unable to send connection message"),
+                                Some(&topic.to_string()),
+                            );
+                        }
+                    };
+                    drop(app);
+                }
+            }
+            "accept" => {
+                let mut app = APP.lock().unwrap();
+
+                if args.len() != 1 || app.connected {
+                    drop(app);
+                    self.handle_command_error(args.clone());
+                } else {
+                    let topic = app.topic.clone();
+                    let _ = match app.accept_connection(client).await {
+                        Ok(_) => {
+                            logger::info!("Successfully sent accept request");
+                        }
+                        Err(_) => app.add_message(
+                            MessageType::Error,
+                            "Unable to accept incoming connection".to_string(),
+                            Some(&topic.to_string()),
+                        ),
+                    };
+                    drop(app);
+                }
+            }
+            "reject" => {
+                let mut app = APP.lock().unwrap();
+                if args.len() != 1 || app.connected {
+                    drop(app);
+                    self.handle_command_error(args.clone());
+                } else {
+                    let topic = app.topic.clone();
+                    let _ = match app.reject_connection(client).await {
+                        Ok(_) => {
+                            logger::info!("Successfully rejected connection request");
+                        }
+                        Err(_) => app.add_message(
+                            MessageType::Error,
+                            "Unable to reject incoming connection".to_string(),
+                            Some(&topic.to_string()),
+                        ),
+                    };
+                    drop(app);
+                }
+            }
+            "leave" => {
+                let mut app = APP.lock().unwrap();
+                if args.len() != 1 || !app.connected {
+                    drop(app);
+                    self.handle_command_error(args.clone());
+                } else {
+                    // Leave
+                    let _ = match app.leave_private_dm(client).await {
+                        Ok(_) => {
+                            logger::info!("Successfully left private message session");
+                        }
+                        Err(_) => app.add_message(
+                            MessageType::Error,
+                            "Unable to leave private message session".to_string(),
+                            None,
+                        ),
+                    };
+                    drop(app);
+                }
+            }
+            _ => {
+                // Send error message back
+                self.handle_command_error(args.clone());
+            }
+        }
+        self.input.clear();
+        self.cursor.reset_cursor();
+    }
+
+    fn handle_command_error(&self, args: Vec<&str>) {
+        // Send error message back
+        let mut app = APP.lock().unwrap();
+        let topic_str = app.topic.clone().to_string();
+
+        if app.connected {
+            app.add_message(
+                MessageType::Error,
+                format!("Unable to perform command: \"{}\"", args.join(" ")),
+                None,
+            );
+        } else {
+            app.add_message(
+                MessageType::Error,
+                format!("Unable to perform command: \"{}\"", args.join(" ")),
+                Some(&topic_str),
+            );
+        }
+
+        drop(app);
+    }
+
     // TODO: When submitting a message, check if it goes off the screen and start to scroll.
     async fn submit_message(&mut self, client: &mut Client) -> Result<(), Box<dyn Error + Send>> {
         // When we push a message we want to include our nickname, so add it manually.
         let mut app = APP.lock().unwrap();
         let nickname = app.nickname.clone();
-
+        let topic = app.topic.clone();
         let message = self.input.clone();
         let nickname_message = format!("{}: {}", nickname, self.input.clone());
-        app.add_message(MessageType::Message, nickname_message);
-        drop(app);
 
-        // Only want to publish the message, not including the nickname
-        client.publish_message(message.clone()).await?;
+        if app.connected {
+            client
+                .send_request(
+                    app.connected_peer.unwrap(),
+                    RequestType::Message,
+                    Some(message.clone()),
+                    None,
+                )
+                .await?;
+            app.add_message(MessageType::Message, nickname_message, None);
+        } else {
+            client
+                .publish_message(message.clone(), topic.clone())
+                .await?;
+            app.add_message(
+                MessageType::Message,
+                nickname_message,
+                Some(&topic.to_string()),
+            );
+        }
+
+        drop(app);
 
         self.input.clear();
         self.cursor.reset_cursor();
+
         Ok(())
     }
 
     fn enter_char(&mut self, new_char: char) {
         let index = self.byte_index();
+
+        // If the first character is a / then it should be a command
+        if index == 0 && new_char == '/' {
+            self.is_command = true
+        }
+
         self.input.insert(index, new_char);
         self.cursor.move_cursor_right(self.input.chars().count());
     }
@@ -207,6 +499,10 @@ impl Room {
 
             let current_index = self.cursor.pos;
             let from_left_to_current_index = current_index - 1;
+
+            if current_index == 1 {
+                self.is_command = false;
+            }
 
             // Getting all characters before the selected character.
             let before_char_to_delete = self.input.chars().take(from_left_to_current_index);
@@ -227,4 +523,8 @@ impl Room {
             .nth(self.cursor.pos)
             .unwrap_or(self.input.len())
     }
+}
+
+fn remove_first(s: &str) -> Option<&str> {
+    s.chars().next().map(|c| &s[c.len_utf8()..])
 }

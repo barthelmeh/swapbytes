@@ -1,4 +1,4 @@
-use crate::network::Client;
+use crate::{network::Client, ui::chat::SelectedTab};
 use libp2p::gossipsub::IdentTopic;
 use ratatui::{
     crossterm::event::{KeyCode, KeyEvent},
@@ -9,7 +9,6 @@ use std::error::Error;
 
 use crate::state::APP;
 
-#[derive(Clone)]
 pub struct SelectRoom {
     list_state: ListState,
 }
@@ -54,7 +53,7 @@ impl SelectRoom {
         let list = List::new(items)
             .block(block)
             .highlight_style(Style::default().fg(Color::Yellow))
-            .highlight_symbol(">> ");
+            .highlight_symbol("-> ");
 
         frame.render_stateful_widget(list, layout[0], &mut self.list_state);
     }
@@ -63,6 +62,7 @@ impl SelectRoom {
         &mut self,
         key: KeyEvent,
         client: &mut Client,
+        selected_tab: &mut SelectedTab,
     ) -> Result<(), Box<dyn Error>> {
         match key.code {
             // Changing room
@@ -82,8 +82,13 @@ impl SelectRoom {
 
                 let mut app = APP.lock().unwrap();
                 let rooms = app.rooms.clone();
-                app.topic = IdentTopic::new(rooms[selected_room_index].to_string());
+                app.join_room(&rooms[selected_room_index], client)
+                    .await
+                    .unwrap();
                 drop(app);
+
+                // Move to the chat screen
+                *selected_tab = SelectedTab::Chat;
             }
             _ => {}
         }
