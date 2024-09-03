@@ -1,9 +1,9 @@
 use crate::{
     logger,
-    network::{Client, PrivateResponse, RequestType},
+    network::{Client, RequestType},
 };
 use lazy_static::lazy_static;
-use libp2p::{gossipsub::IdentTopic, request_response::ResponseChannel, PeerId};
+use libp2p::{gossipsub::IdentTopic, PeerId};
 use std::{
     collections::HashMap,
     error::Error,

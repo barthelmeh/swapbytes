@@ -2,7 +2,6 @@ use futures::channel::{mpsc, oneshot};
 use futures::prelude::*;
 use futures::StreamExt;
 use libp2p::gossipsub::IdentTopic;
-use tokio::io::AsyncReadExt;
 
 use crate::logger;
 use crate::state::{MessageType, APP};
@@ -21,10 +20,7 @@ use libp2p::StreamProtocol;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
-use std::io::Error as StdError;
-use std::io::ErrorKind;
 use std::time::Duration;
-use tokio::fs::File;
 
 #[derive(NetworkBehaviour)]
 struct Behaviour {
