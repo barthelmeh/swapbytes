@@ -29,16 +29,16 @@ impl Default for Commands {
             description: "Invite a peer to share files and chat privately.".to_string(),
         });
         commands.push(Command {
+            command: "/request [file_path]".to_string(),
+            description: "Request a file in a private messaging session".to_string(),
+        });
+        commands.push(Command {
             command: "/accept".to_string(),
             description: "Accept an incoming request (such as a file, or a connection)".to_string(),
         });
         commands.push(Command {
             command: "/reject".to_string(),
             description: "Accept an incoming request (such as a file, or a connection)".to_string(),
-        });
-        commands.push(Command {
-            command: "/request [file_path]".to_string(),
-            description: "Request a file in a private messaging session".to_string(),
         });
         commands.push(Command {
             command: "/leave".to_string(),
