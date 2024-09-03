@@ -1,12 +1,16 @@
-use crate::{logger, network::Client, network::RequestType};
+use crate::{
+    logger,
+    network::{Client, PrivateResponse, RequestType},
+};
 use lazy_static::lazy_static;
-use libp2p::{gossipsub::IdentTopic, PeerId};
+use libp2p::{gossipsub::IdentTopic, request_response::ResponseChannel, PeerId};
 use std::{
     collections::HashMap,
     error::Error,
     io,
     sync::{Arc, Mutex},
 };
+use tokio::fs;
 
 pub struct App {
     // Stores a map of {topic, [(type, message)]}
@@ -23,6 +27,7 @@ pub struct App {
     pub connected_peer: Option<PeerId>,
     pub connected: bool,
     pub requested_file: Option<String>,
+    pub requesting_file: bool,
 }
 
 #[derive(Clone)]
@@ -56,6 +61,7 @@ impl App {
             connected_peer: None,
             connected: false,
             requested_file: None,
+            requesting_file: false,
         }
     }
 
@@ -214,12 +220,47 @@ impl App {
         Ok(())
     }
 
-    pub(crate) async fn accept_connection(
+    pub(crate) async fn accept_request(
         &mut self,
         client: &mut Client,
     ) -> Result<(), Box<dyn Error + Send>> {
+        // Accepts any incoming request
+
         let topic = self.topic.clone();
+
         if self.connected_peer.is_some() {
+            // Check that we have the file
+
+            if self.requested_file.is_some() {
+                if !self
+                    .check_file_exists(self.requested_file.clone().unwrap())
+                    .await
+                {
+                    // Unable to accept as file doesn't exist
+                    self.add_message(
+                        MessageType::Error,
+                        "Unable to send file as file doesn't exist".to_string(),
+                        None,
+                    );
+                    self.add_message(
+                        MessageType::Error,
+                        "Sending automatic reject message".to_string(),
+                        None,
+                    );
+                    // Send reject message
+                    client
+                        .send_request(
+                            self.connected_peer.unwrap(),
+                            RequestType::Reject,
+                            None,
+                            None,
+                        )
+                        .await?;
+
+                    return Ok(());
+                }
+            }
+
             client
                 .send_request(
                     self.connected_peer.unwrap(),
@@ -228,23 +269,29 @@ impl App {
                     None,
                 )
                 .await?;
-            self.join_private_dm();
+
+            if self.requested_file.is_none() {
+                self.join_private_dm();
+            }
         } else {
             self.add_message(
                 MessageType::Error,
                 "Unable to accept request as there is no incoming request.".to_string(),
                 Some(&topic.to_string()),
-            )
+            );
         }
 
         Ok(())
     }
 
-    pub(crate) async fn reject_connection(
+    pub(crate) async fn reject_request(
         &mut self,
         client: &mut Client,
     ) -> Result<(), Box<dyn Error + Send>> {
+        // Rejects any incoming request
+
         let topic = self.topic.clone();
+
         if self.connected_peer.is_some() {
             client
                 .send_request(
@@ -254,8 +301,12 @@ impl App {
                     None,
                 )
                 .await?;
-            self.connected_peer = None;
-            self.connected = false;
+            if self.requested_file.is_some() {
+                self.requested_file = None;
+            } else {
+                self.connected_peer = None;
+                self.connected = false;
+            }
         } else {
             self.add_message(
                 MessageType::Error,
@@ -305,7 +356,50 @@ impl App {
             .await;
         self.connected = false;
         self.connected_peer = None;
+        self.requested_file = None;
+        self.requesting_file = false;
         Ok(())
+    }
+
+    pub(crate) async fn request_file(
+        &mut self,
+        filename: String,
+        client: &mut Client,
+    ) -> Result<(), Box<dyn Error + Send>> {
+        if self.connected_peer.is_none() {
+            return Err(Box::new(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("No connected peer"),
+            )));
+        }
+        logger::info!("Sending file request for file: {}", filename.clone());
+        let peer_id = self.connected_peer.clone().unwrap();
+        let _ = client
+            .send_request(
+                peer_id,
+                RequestType::FileRequest,
+                None,
+                Some(filename.clone()),
+            )
+            .await;
+
+        self.add_message(
+            MessageType::Info,
+            format!("Requested file: {}", filename.clone()),
+            None,
+        );
+
+        self.requesting_file = true;
+        self.requested_file = Some(filename);
+
+        Ok(())
+    }
+
+    async fn check_file_exists(&self, file_path: String) -> bool {
+        match fs::metadata(file_path).await {
+            Ok(_) => true,
+            Err(_) => false,
+        }
     }
 }
 

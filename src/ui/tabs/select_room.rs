@@ -1,5 +1,4 @@
 use crate::{network::Client, ui::chat::SelectedTab};
-use libp2p::gossipsub::IdentTopic;
 use ratatui::{
     crossterm::event::{KeyCode, KeyEvent},
     prelude::*,

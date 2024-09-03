@@ -2,31 +2,29 @@ use futures::channel::{mpsc, oneshot};
 use futures::prelude::*;
 use futures::StreamExt;
 use libp2p::gossipsub::IdentTopic;
-use libp2p::swarm::{ConnectionDenied, DialError};
+use tokio::io::AsyncReadExt;
 
 use crate::logger;
 use crate::state::{MessageType, APP};
 
 use libp2p::{
     core::Multiaddr,
-    gossipsub::{self, Topic},
-    identity,
+    gossipsub,
     kad::{self, store::MemoryStore, Mode},
-    mdns,
-    multiaddr::Protocol,
-    noise,
-    request_response::{self, OutboundRequestId, ProtocolSupport, ResponseChannel},
+    mdns, noise,
+    request_response::{self, ProtocolSupport, ResponseChannel},
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
     tcp, yamux, PeerId,
 };
 
 use libp2p::StreamProtocol;
 use serde::{Deserialize, Serialize};
-use std::collections::{hash_map, HashMap, HashSet};
+use std::collections::HashMap;
 use std::error::Error;
 use std::io::Error as StdError;
 use std::io::ErrorKind;
 use std::time::Duration;
+use tokio::fs::File;
 
 #[derive(NetworkBehaviour)]
 struct Behaviour {
@@ -122,12 +120,6 @@ enum Command {
         request_type: RequestType,
         message: Option<String>,
         filename: Option<String>,
-        sender: oneshot::Sender<Result<(), Box<dyn Error + Send>>>,
-    },
-    SendResponse {
-        ack: bool,
-        file_path: Option<String>,
-        channel: ResponseChannel<PrivateResponse>,
         sender: oneshot::Sender<Result<(), Box<dyn Error + Send>>>,
     },
 }
@@ -231,25 +223,6 @@ impl Client {
                 request_type,
                 message,
                 filename,
-                sender,
-            })
-            .await
-            .expect("Command receiver not to be dropped.");
-        receiver.await.expect("Sender not to be dropped.")
-    }
-
-    pub(crate) async fn send_response(
-        &mut self,
-        ack: bool,
-        file_path: Option<String>,
-        channel: ResponseChannel<PrivateResponse>,
-    ) -> Result<(), Box<dyn Error + Send>> {
-        let (sender, receiver) = oneshot::channel();
-        self.sender
-            .send(Command::SendResponse {
-                ack,
-                file_path,
-                channel,
                 sender,
             })
             .await
@@ -488,13 +461,30 @@ impl EventLoop {
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
-                    // Receive a request so choose how to display the contents to the user
-                    self.handle_private_request(request, peer);
-                    // Ack
-                    self.send_ack(channel);
+                    // If we already have a requested_file and we recieve a file request, just send a file response
+                    let app = APP.lock().unwrap();
+                    let requested_file = app.requested_file.clone();
+                    let requesting_file = app.requesting_file;
+                    drop(app);
+
+                    let path = match requested_file.is_some() && requesting_file == false {
+                        true => {
+                            let mut app = APP.lock().unwrap();
+                            app.requested_file = None;
+                            drop(app);
+                            Some(requested_file.unwrap())
+                        }
+                        false => {
+                            self.handle_private_request(request.clone(), peer);
+                            None
+                        }
+                    };
+
+                    self.send_response(path.is_none(), path, channel);
                 }
                 request_response::Message::Response { response, .. } => {
-                    self.handle_private_response(response, peer);
+                    logger::info!("Recieved response");
+                    self.handle_private_response(response);
                 }
             },
 
@@ -600,8 +590,9 @@ impl EventLoop {
                 sender,
             } => {
                 logger::info!(
-                    "Sending request with information: {}, {:?} to peer: {}",
-                    message.clone().unwrap_or("".to_string()),
+                    "Sending request with information: {}, {}, {:?} to peer: {}",
+                    message.clone().unwrap_or("no message".to_string()),
+                    filename.clone().unwrap_or("no file".to_string()),
                     request_type,
                     peer_id.clone()
                 );
@@ -617,31 +608,6 @@ impl EventLoop {
                     .send_request(&peer_id, request);
 
                 let _ = sender.send(Ok(()));
-            }
-
-            Command::SendResponse {
-                ack,
-                file_path,
-                channel,
-                sender,
-            } => {
-                logger::info!("Sending response with ack {}", ack);
-                let response = PrivateResponse {
-                    ack,
-                    file_bytes: None,
-                };
-                let _ = match self
-                    .swarm
-                    .behaviour_mut()
-                    .request_response
-                    .send_response(channel, response)
-                {
-                    Ok(_) => sender.send(Ok(())),
-                    Err(_) => sender.send(Err(Box::new(StdError::new(
-                        ErrorKind::Other,
-                        "Unable to send response",
-                    )))),
-                };
             }
         }
     }
@@ -694,18 +660,47 @@ impl EventLoop {
                 )
             }
             RequestType::Accept => {
-                // Peer is now connected
-                logger::info!("Joining private DM");
-                app.join_private_dm();
+                if app.requesting_file {
+                    // send another file request as it has been accepted
+                    let connected_peer = app.connected_peer.clone().unwrap();
+                    let filename = app.requested_file.clone();
+                    let request = PrivateRequest {
+                        request_type: RequestType::FileRequest,
+                        message: None,
+                        filename,
+                    };
+                    self.swarm
+                        .behaviour_mut()
+                        .request_response
+                        .send_request(&connected_peer, request);
+                } else {
+                    app.join_private_dm();
+                }
             }
             RequestType::Reject => {
                 // Peer has rejected
-                app.connected_peer = None;
-                let topic = app.topic.clone();
+                let nicknames = app.nicknames.clone();
+                let default_nickname = "Peer".to_string();
+                let nickname = nicknames
+                    .get(&app.connected_peer.unwrap())
+                    .unwrap_or(&default_nickname);
+
+                let topic_str = app.topic.clone().to_string();
+                let topic = match app.connected {
+                    true => None,
+                    false => Some(&topic_str),
+                };
+
+                if app.requesting_file {
+                    app.requesting_file = false;
+                    app.requested_file = None;
+                } else {
+                    app.connected_peer = None;
+                }
                 app.add_message(
                     MessageType::Info,
-                    format!("Peer has rejected connection request."),
-                    Some(&topic.to_string()),
+                    format!("{} has rejected the request.", nickname),
+                    topic,
                 )
             }
             RequestType::Message => {
@@ -727,7 +722,8 @@ impl EventLoop {
                 let peer_id = app.connected_peer.clone().unwrap();
                 let nicknames = app.nicknames.clone();
                 let nickname = nicknames.get(&peer_id).unwrap();
-                let requested_file = request.message.unwrap_or("".to_string());
+                let requested_file = request.filename.unwrap();
+
                 app.add_message(
                     MessageType::Info,
                     format!("{} has requested the file: {}", nickname, requested_file),
@@ -735,7 +731,7 @@ impl EventLoop {
                 );
                 app.add_message(
                     MessageType::Info,
-                    format!("Type \"/send\" to send the file"),
+                    format!("Type \"/accept\" or \"/reject\" to accept or reject the request"),
                     None,
                 );
                 app.requested_file = Some(requested_file);
@@ -764,11 +760,32 @@ impl EventLoop {
         drop(app);
     }
 
-    fn send_ack(&mut self, channel: ResponseChannel<PrivateResponse>) {
-        let response = PrivateResponse {
-            ack: true,
-            file_bytes: None,
+    fn get_file(&self, file_path: String) -> Vec<u8> {
+        match std::fs::read(file_path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                logger::error!("Unable to read file: {:?}", e);
+                let mut app = APP.lock().unwrap();
+                app.add_message(MessageType::Error, "Unable to read file".to_string(), None);
+                drop(app);
+                return Vec::new();
+            }
+        }
+    }
+
+    fn send_response(
+        &mut self,
+        ack: bool,
+        file_path: Option<String>,
+        channel: ResponseChannel<PrivateResponse>,
+    ) {
+        let file_bytes = if file_path.is_some() {
+            Some(self.get_file(file_path.unwrap()))
+        } else {
+            None
         };
+
+        let response = PrivateResponse { ack, file_bytes };
         let _ = self
             .swarm
             .behaviour_mut()
@@ -776,13 +793,39 @@ impl EventLoop {
             .send_response(channel, response);
     }
 
-    fn handle_private_response(&mut self, response: PrivateResponse, peer: PeerId) {
+    fn handle_private_response(&mut self, response: PrivateResponse) {
         if response.ack {
             // Ignore it
             return;
         }
         // Otherwise, want to download the file.
-        todo!("Download the file!");
+        // If we recieve empty file bytes then there is an error
+        let mut app = APP.lock().unwrap();
+        let bytes = response.file_bytes;
+
+        // If we aren't requesting a file then we do nothing
+        logger::info!("Handling private response that is not an ack!");
+        if !app.requesting_file {
+            return;
+        }
+
+        if bytes.is_none() || bytes.clone().unwrap().is_empty() {
+            app.add_message(
+                MessageType::Error,
+                "Unable to download file".to_string(),
+                None,
+            );
+        } else {
+            // Download the file
+            let path = app.requested_file.clone().unwrap();
+            let _ = std::fs::write(path.clone(), bytes.unwrap());
+            app.requesting_file = false;
+            app.requested_file = None;
+
+            app.add_message(MessageType::Info, format!("Downloaded file: {path}"), None);
+        }
+
+        drop(app);
     }
 }
 
