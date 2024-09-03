@@ -266,7 +266,7 @@ impl EventLoop {
             // Peer discovered
             SwarmEvent::Behaviour(BehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                 for (peer_id, multiaddr) in list {
-                    logger::info!("Peer discovered: {peer_id}");
+                    logger::info!("Discovered peer at {peer_id}");
 
                     // Add to gossipsub
                     self.swarm
@@ -311,7 +311,7 @@ impl EventLoop {
             }
             // Connection Closed
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                logger::info!("Peer expired: {peer_id}");
+                logger::info!("Connection closed to {peer_id}");
 
                 // Remove from gossipsub
                 self.swarm
@@ -337,6 +337,7 @@ impl EventLoop {
                 let nicknames = app.nicknames.clone();
                 let topic = message.topic.clone();
                 let message_str = String::from_utf8_lossy(&message.data);
+                logger::info!("Received message from {} : {}", peer_id, message_str);
 
                 // if the nickname is in app.nicknames, then add it
                 // else try and get nickname
@@ -348,7 +349,6 @@ impl EventLoop {
                             format!("{nickname}: {}", message_str),
                             Some(&topic.into_string()),
                         );
-                        logger::info!("{nickname}: {}", message_str);
                     }
                     None => {
                         // Nickname not stored so request it
@@ -358,7 +358,6 @@ impl EventLoop {
 
                         self.stored_messages
                             .insert(query_id.to_string(), message.clone());
-                        logger::info!("Getting nickname for {peer_id}");
                     }
                 }
 
@@ -383,8 +382,6 @@ impl EventLoop {
                         // Deserialize the value as a vector of strings for rooms
                         match serde_cbor::from_slice::<Vec<String>>(&value) {
                             Ok(rooms) => {
-                                logger::info!("Retrieved rooms: {:?}", rooms);
-
                                 // Add the rooms to the application state, handle as needed
                                 let mut app = APP.lock().unwrap();
                                 app.rooms = rooms;
@@ -401,10 +398,14 @@ impl EventLoop {
                                 match PeerId::from_bytes(key.as_ref()) {
                                     Ok(peer_id) => {
                                         let mut app = APP.lock().unwrap();
-                                        app.nicknames.insert(peer_id, nickname.clone());
+                                        if !app.nicknames.contains_key(&peer_id) {
+                                            logger::info!(
+                                                "Inserted nickname for peer: {:?}",
+                                                key_str
+                                            );
+                                            app.nicknames.insert(peer_id, nickname.clone());
+                                        }
                                         drop(app);
-
-                                        logger::info!("Inserted nickname for peer: {:?}", key_str);
 
                                         // If its a message
                                         if self.stored_messages.contains_key(&id.to_string()) {
@@ -415,7 +416,6 @@ impl EventLoop {
                                                     String::from_utf8_lossy(&message.data);
                                                 let formatted_message =
                                                     format!("{}: {}", nickname, message_str);
-                                                logger::info!("{}", formatted_message);
 
                                                 let mut app = APP.lock().unwrap();
                                                 app.add_message(
@@ -494,7 +494,6 @@ impl EventLoop {
                     self.send_response(path.is_none(), path, channel);
                 }
                 request_response::Message::Response { response, .. } => {
-                    logger::info!("Recieved response");
                     self.handle_private_response(response);
                 }
             },
@@ -643,7 +642,6 @@ impl EventLoop {
                 };
 
                 let nicknames = app.nicknames.clone();
-                logger::info!("{:?}", nicknames);
                 let nickname = match nicknames.get(&peer) {
                     Some(nickname) => nickname,
                     None => {
@@ -749,7 +747,6 @@ impl EventLoop {
             }
             RequestType::Leave => {
                 // Show a message saying that the user has left
-                logger::info!("Recieved a Leave message");
                 let peer_id = app.connected_peer.clone().unwrap();
                 let nicknames = app.nicknames.clone();
                 let nickname = nicknames.get(&peer_id).unwrap();
@@ -797,6 +794,8 @@ impl EventLoop {
         };
 
         let response = PrivateResponse { ack, file_bytes };
+
+        logger::info!("Sending response {:?}", response);
         let _ = self
             .swarm
             .behaviour_mut()
@@ -815,7 +814,6 @@ impl EventLoop {
         let bytes = response.file_bytes;
 
         // If we aren't requesting a file then we do nothing
-        logger::info!("Handling private response that is not an ack!");
         if !app.requesting_file {
             return;
         }
@@ -832,6 +830,8 @@ impl EventLoop {
             let _ = std::fs::write(path.clone(), bytes.unwrap());
             app.requesting_file = false;
             app.requested_file = None;
+
+            logger::info!("Downloaded file {}", path);
 
             app.add_message(MessageType::Info, format!("Downloaded file: {path}"), None);
         }

@@ -37,8 +37,7 @@ impl LoginScreen {
         // Generate the title text as ASCII art
         let ascii_art = match text_to_ascii_art::to_art("SwapBytes".to_string(), font, 0, 0, 0) {
             Ok(art) => art,
-            Err(err) => {
-                logger::error!("Error generating ASCII art: {}", err);
+            Err(_) => {
                 return;
             }
         };

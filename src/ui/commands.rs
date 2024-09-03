@@ -79,7 +79,6 @@ impl Commands {
     }
 
     async fn handle_help(&self) {
-        logger::info!("Displaying help message");
         let mut app = APP.lock().unwrap();
         let topic_str = app.topic.clone().to_string();
         let topic = match app.connected {
@@ -246,7 +245,7 @@ impl Commands {
                         "Unable to send file request.".to_string(),
                         None,
                     );
-                    logger::error!("{:?}", e);
+                    logger::error!("Error handling request: {:?}", e);
                 }
             };
             drop(app);

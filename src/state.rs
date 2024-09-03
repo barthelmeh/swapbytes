@@ -371,6 +371,9 @@ impl App {
 
         // Set the private messages
         let peer_nickname = self.nicknames.get(&self.connected_peer.unwrap()).unwrap();
+
+        logger::info!("Joining DM with {}", peer_nickname);
+
         self.add_message(
             MessageType::Info,
             format!("Joined private message with {}", peer_nickname),
@@ -396,6 +399,7 @@ impl App {
 
         // Send a leave request
         let peer_id = self.connected_peer.clone().unwrap();
+        logger::info!("Leaving private DM with {}", peer_id);
         let _ = client
             .send_request(peer_id, RequestType::Leave, None, None)
             .await;

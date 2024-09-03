@@ -170,7 +170,7 @@ impl Room {
                     let _ = match self.submit_message(client).await {
                         Ok(_) => {}
                         Err(e) => {
-                            logger::error!("Unhandled error: {:?}", e);
+                            logger::error!("Unhandled error when submitting message: {:?}", e);
                         }
                     };
                 }
