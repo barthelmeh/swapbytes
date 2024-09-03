@@ -61,8 +61,6 @@ impl Commands {
             return;
         };
 
-        self.add_empty_message();
-
         // Handle commands based on the first argument
         match cmd {
             "/help" => self.handle_help().await,
@@ -78,8 +76,6 @@ impl Commands {
                 self.handle_command_error(args);
             }
         }
-
-        self.add_empty_message();
     }
 
     async fn handle_help(&self) {
@@ -141,7 +137,6 @@ impl Commands {
             false => Some(&topic_str),
             true => None,
         };
-        app.add_message(MessageType::Info, "".to_string(), topic);
         if nicknames.is_empty() {
             app.add_message(
                 MessageType::Info,
@@ -154,7 +149,6 @@ impl Commands {
                 app.add_message(MessageType::Info, nickname.clone(), topic);
             }
 
-            app.add_message(MessageType::Info, "".to_string(), topic);
             drop(app);
         }
     }
@@ -299,18 +293,6 @@ impl Commands {
             );
         }
 
-        drop(app);
-    }
-
-    pub fn add_empty_message(&self) {
-        // Add an empty message
-        let mut app = APP.lock().unwrap();
-        let topic_str = app.topic.clone().to_string();
-        let topic = match app.connected {
-            true => None,
-            false => Some(&topic_str),
-        };
-        app.add_message(MessageType::Message, "".to_string(), topic);
         drop(app);
     }
 }

@@ -209,11 +209,6 @@ impl App {
                     "Type \"/help\" to view all available commands".to_string(),
                     Some(&self.topic.clone().to_string()),
                 );
-                self.add_message(
-                    MessageType::Message,
-                    "".to_string(),
-                    Some(&self.topic.clone().to_string()),
-                );
             }
         };
 
