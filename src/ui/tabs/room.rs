@@ -62,18 +62,10 @@ impl Room {
         let total_message_height = lines.len(); // Total lines of messages, usize
         let visible_area_height = messages_area.height as usize; // Height of the message area in rows, usize
 
-        // Ensure vertical scroll is within bounds
-        let max_scroll = total_message_height.saturating_sub(visible_area_height);
-        if self.vertical_scroll > max_scroll {
-            self.vertical_scroll = max_scroll; // Ensure we don't scroll out of bounds
-        }
-
-        // Check if user is at the bottom of the chat (auto-scroll)
-        let is_at_bottom = self.vertical_scroll + visible_area_height >= total_message_height;
-
-        // Auto-scroll: if new messages arrive and we're at the bottom, scroll to the bottom
-        if self.auto_scroll && is_at_bottom {
-            self.vertical_scroll = max_scroll;
+        // Scroll to keep up with messages
+        if (total_message_height >= visible_area_height - 3) && self.auto_scroll {
+            self.vertical_scroll = total_message_height.saturating_sub(visible_area_height - 3);
+            self.vertical_scroll_state = self.vertical_scroll_state.position(self.vertical_scroll);
         }
 
         let messages = Paragraph::new(messages_content)
@@ -153,13 +145,7 @@ impl Room {
             y: input_area.y + 1,
         });
 
-        // Handle auto-scroll toggle when user manually scrolls
-        if self.vertical_scroll < max_scroll {
-            self.auto_scroll = false;
-        }
-
-        // If the user scrolls back to the bottom, resume auto-scrolling
-        if is_at_bottom {
+        if self.vertical_scroll >= total_message_height.saturating_sub(visible_area_height - 3) {
             self.auto_scroll = true;
         }
     }
@@ -191,6 +177,7 @@ impl Room {
             }
             // Scrolling
             KeyCode::Up => {
+                self.auto_scroll = false;
                 self.vertical_scroll = self.vertical_scroll.saturating_sub(1);
                 self.vertical_scroll_state =
                     self.vertical_scroll_state.position(self.vertical_scroll);
@@ -225,7 +212,6 @@ impl Room {
         self.cursor.reset_cursor();
     }
 
-    // TODO: When submitting a message, check if it goes off the screen and start to scroll.
     async fn submit_message(&mut self, client: &mut Client) -> Result<(), Box<dyn Error + Send>> {
         // When we push a message we want to include our nickname, so add it manually.
         let mut app = APP.lock().unwrap();

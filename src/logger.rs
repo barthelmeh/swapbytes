@@ -14,7 +14,7 @@ pub fn initialize() {
     let start_time = SystemTime::now();
     let since_epoch = start_time.duration_since(UNIX_EPOCH).unwrap();
     let timestamp = since_epoch.as_secs();
-    let log_file_path = format!("{}/app_{}.log", log_dir, timestamp);
+    let log_file_path = format!("{}/swapbytes{}.log", log_dir, timestamp);
 
     CombinedLogger::init(vec![
         // Write logs to a unique file
