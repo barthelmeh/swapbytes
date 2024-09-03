@@ -21,6 +21,7 @@ pub struct Room {
     pub cursor: Cursor,
     is_command: bool,
     command_handler: Commands,
+    auto_scroll: bool,
 }
 
 impl Default for Room {
@@ -32,6 +33,7 @@ impl Default for Room {
             cursor: Cursor::default(),
             is_command: false,
             command_handler: Commands::default(),
+            auto_scroll: true,
         }
     }
 }
@@ -50,10 +52,29 @@ impl Room {
 
         // Add the chat messages
         for (message_type, message) in &chat_messages {
-            lines.push(self.get_styled_line(message_type.clone(), message.clone()));
+            let styled_line = get_styled_line(message_type.clone(), message);
+            lines.push(styled_line);
         }
 
-        let messages_content = Text::from(lines);
+        let messages_content = Text::from(lines.clone());
+
+        // Calculate total height of messages
+        let total_message_height = lines.len(); // Total lines of messages, usize
+        let visible_area_height = messages_area.height as usize; // Height of the message area in rows, usize
+
+        // Ensure vertical scroll is within bounds
+        let max_scroll = total_message_height.saturating_sub(visible_area_height);
+        if self.vertical_scroll > max_scroll {
+            self.vertical_scroll = max_scroll; // Ensure we don't scroll out of bounds
+        }
+
+        // Check if user is at the bottom of the chat (auto-scroll)
+        let is_at_bottom = self.vertical_scroll + visible_area_height >= total_message_height;
+
+        // Auto-scroll: if new messages arrive and we're at the bottom, scroll to the bottom
+        if self.auto_scroll && is_at_bottom {
+            self.vertical_scroll = max_scroll;
+        }
 
         let messages = Paragraph::new(messages_content)
             .block(
@@ -79,13 +100,15 @@ impl Room {
                         .position(block::Position::Bottom),
                     ),
             )
-            .scroll((self.vertical_scroll as u16, 0));
+            .scroll((self.vertical_scroll as u16, 0)); // Cast `vertical_scroll` to u16
 
         frame.render_widget(messages, messages_area);
 
+        // Handle scrollbar state
         self.vertical_scroll_state = self
             .vertical_scroll_state
-            .content_length(chat_messages.len());
+            .content_length(total_message_height); // usize
+
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("↑"))
@@ -94,12 +117,19 @@ impl Room {
             &mut self.vertical_scroll_state,
         );
 
+        let app = APP.lock().unwrap();
+        let num_peers = app.num_connected_peers;
+        drop(app);
+
         // Render input box
-        let input_style = match self.is_command {
-            true => Style::default()
+        let input_style = if num_peers == 0 {
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        } else if self.is_command {
+            Style::default()
                 .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-            false => Style::default().fg(Color::Yellow),
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Yellow)
         };
 
         let input = Paragraph::new(self.input.as_str())
@@ -119,34 +149,18 @@ impl Room {
         // Render the cursor
         #[allow(clippy::cast_possible_truncation)]
         frame.set_cursor_position(Position {
-            // Draw the cursor at the current position in the input field.
-            // This position is can be controlled via the left and right arrow key
             x: input_area.x + self.cursor.pos as u16 + 1,
-            // Move one line down, from the border to the input line
             y: input_area.y + 1,
         });
-    }
 
-    pub fn get_styled_line(&self, message_type: MessageType, message: String) -> Line {
-        match message_type {
-            MessageType::Message => Line::from(Span::raw(message)),
-            MessageType::Info => Line::from(Span::styled(
-                message,
-                Style::default()
-                    .add_modifier(Modifier::ITALIC)
-                    .fg(Color::Yellow),
-            )),
-            MessageType::Error => Line::from(Span::styled(
-                message,
-                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
-            )),
-            MessageType::Help => Line::from(Span::styled(
-                message,
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .add_modifier(Modifier::ITALIC)
-                    .fg(Color::Cyan),
-            )),
+        // Handle auto-scroll toggle when user manually scrolls
+        if self.vertical_scroll < max_scroll {
+            self.auto_scroll = false;
+        }
+
+        // If the user scrolls back to the bottom, resume auto-scrolling
+        if is_at_bottom {
+            self.auto_scroll = true;
         }
     }
 
@@ -295,5 +309,28 @@ impl Room {
             .map(|(i, _)| i)
             .nth(self.cursor.pos)
             .unwrap_or(self.input.len())
+    }
+}
+
+fn get_styled_line<'a>(message_type: MessageType, message: &'a str) -> Line<'a> {
+    match message_type {
+        MessageType::Message => Line::from(Span::raw(message)),
+        MessageType::Info => Line::from(Span::styled(
+            message,
+            Style::default()
+                .add_modifier(Modifier::ITALIC)
+                .fg(Color::Yellow),
+        )),
+        MessageType::Error => Line::from(Span::styled(
+            message,
+            Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+        )),
+        MessageType::Help => Line::from(Span::styled(
+            message,
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::ITALIC)
+                .fg(Color::Cyan),
+        )),
     }
 }
