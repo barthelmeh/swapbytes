@@ -30,7 +30,7 @@ pub struct App {
     pub requesting_file: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub enum Screen {
     Login,
     Chat,
@@ -63,6 +63,56 @@ impl App {
             requested_file: None,
             requesting_file: false,
         }
+    }
+
+    pub fn add_peer(&mut self) {
+        if self.num_connected_peers == 0 {
+            // If adding a peer after having zero, show message
+            let topic_str = self.topic.clone().to_string();
+
+            self.add_message(
+                MessageType::Info,
+                "Peer has connected".to_string(),
+                Some(&topic_str),
+            );
+        }
+        self.num_connected_peers += 1;
+    }
+
+    pub fn remove_peer(&mut self, peer_id: PeerId) {
+        if self.num_connected_peers == 0 {
+            return;
+        };
+
+        let topic_str = self.topic.clone().to_string();
+
+        if (self.num_connected_peers) == 1 && self.screen == Screen::Chat {
+            // If in a private context, return to global chat
+            if self.connected {
+                self.connected = false;
+                self.connected_peer = None;
+            }
+
+            self.add_message(
+                MessageType::Error,
+                "No connected peers.".to_string(),
+                Some(&topic_str),
+            );
+        }
+        self.nicknames.remove_entry(&peer_id);
+
+        // If the peer that expired is the one that we are DMing, then leave the chat.
+        if self.connected && self.connected_peer.unwrap() == peer_id {
+            self.connected = false;
+            self.connected_peer = None;
+            self.add_message(
+                MessageType::Error,
+                "Connected peer has left the application.".to_string(),
+                Some(&topic_str),
+            );
+        }
+
+        self.num_connected_peers -= 1;
     }
 
     pub fn add_message(

@@ -220,6 +220,10 @@ impl Room {
         let message = self.input.clone();
         let nickname_message = format!("{}: {}", nickname, self.input.clone());
 
+        if app.num_connected_peers == 0 {
+            return Ok(());
+        }
+
         if app.connected {
             client
                 .send_request(

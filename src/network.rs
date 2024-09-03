@@ -286,7 +286,7 @@ impl EventLoop {
 
                     // Add peer
                     let mut app = APP.lock().unwrap();
-                    app.num_connected_peers += 1;
+                    app.add_peer();
                     drop(app);
                 }
             }
@@ -307,14 +307,29 @@ impl EventLoop {
                         .kademlia
                         .remove_address(&peer_id, &multiaddr);
 
-                    // Remove nickname
-                    let mut app = APP.lock().unwrap();
-                    app.nicknames.remove_entry(&peer_id);
-
                     // Decrease count
-                    app.num_connected_peers -= 1;
+                    let mut app = APP.lock().unwrap();
+                    app.remove_peer(peer_id);
                     drop(app);
                 }
+            }
+            // Connection Closed
+            SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                logger::info!("Peer expired: {peer_id}");
+
+                // Remove from gossipsub
+                self.swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .remove_explicit_peer(&peer_id);
+
+                // Remove from kademlia
+                self.swarm.behaviour_mut().kademlia.remove_peer(&peer_id);
+
+                // Decrease count
+                let mut app = APP.lock().unwrap();
+                app.remove_peer(peer_id);
+                drop(app);
             }
             // Message received
             SwarmEvent::Behaviour(BehaviourEvent::Gossipsub(gossipsub::Event::Message {

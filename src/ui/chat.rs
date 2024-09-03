@@ -17,11 +17,17 @@ pub struct ChatScreen {
     pub selected_tab: SelectedTab,
     pub chat: tabs::room::Room,
     pub select_room: tabs::select_room::SelectRoom,
-    pub direct_messaging: tabs::direct_messaging::DirectMessaging,
 }
 
 impl ChatScreen {
     pub fn render(&mut self, frame: &mut Frame) {
+        // As render always gets called, first check if there are no connected peers and we are on the select room tab.
+        let app = APP.lock().unwrap();
+        if app.num_connected_peers == 0 {
+            self.selected_tab = SelectedTab::Chat;
+        }
+        drop(app);
+
         let vertical = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]);
         let [tab_area, content_area] = vertical.areas(frame.area());
 
@@ -30,7 +36,6 @@ impl ChatScreen {
         match self.selected_tab {
             SelectedTab::Chat => self.chat.render(frame, content_area),
             SelectedTab::SelectRoom => self.select_room.render(frame, content_area),
-            SelectedTab::DirectMessage => self.direct_messaging.render(frame, content_area),
         }
     }
 
@@ -69,15 +74,21 @@ impl ChatScreen {
                     match key.code {
                         // Navigating tabs
                         KeyCode::Tab => {
+                            // If no connected peers, do nothing
+                            let app = APP.lock().unwrap();
+                            if app.num_connected_peers == 0 {
+                                return Ok(());
+                            }
+
                             // If navigating to select_room, fetch rooms
                             match self.selected_tab {
                                 SelectedTab::Chat => {
-                                    let app = APP.lock().unwrap();
                                     app.fetch_rooms(client).await.unwrap();
-                                    drop(app);
                                 }
                                 _ => {}
                             }
+
+                            drop(app);
 
                             self.selected_tab = self.selected_tab.next_tab();
                         }
@@ -95,9 +106,6 @@ impl ChatScreen {
                                     .handle_events(key, client, &mut self.selected_tab)
                                     .await?
                             }
-                            SelectedTab::DirectMessage => {
-                                self.direct_messaging.handle_events(key, client).await?;
-                            }
                         },
                     }
                 }
@@ -114,8 +122,6 @@ pub enum SelectedTab {
     Chat,
     #[strum(to_string = "Select Room")]
     SelectRoom,
-    #[strum(to_string = "Direct Message")]
-    DirectMessage,
 }
 
 impl SelectedTab {
