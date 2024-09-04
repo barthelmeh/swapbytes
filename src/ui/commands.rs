@@ -17,12 +17,12 @@ impl Default for Commands {
             description: "View a list of all available commands".to_string(),
         });
         commands.push(Command {
-            command: "/create_room".to_string(),
-            description: "Create a new room and join it. (e.g. /create_room COSC401)".to_string(),
-        });
-        commands.push(Command {
             command: "/list".to_string(),
             description: "List all known users that have sent a message".to_string(),
+        });
+        commands.push(Command {
+            command: "/create_room [room]".to_string(),
+            description: "Create a new room and join it. (e.g. /create_room COSC401)".to_string(),
         });
         commands.push(Command {
             command: "/connect [nickname]".to_string(),
