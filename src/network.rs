@@ -761,7 +761,9 @@ impl EventLoop {
                     Some(&topic.to_string()),
                 );
                 app.connected_peer = None;
-                app.connected = false
+                app.connected = false;
+                app.requesting_file = false;
+                app.requested_file = None;
             }
         };
 
