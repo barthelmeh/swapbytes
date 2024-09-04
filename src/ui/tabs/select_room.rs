@@ -33,6 +33,22 @@ impl SelectRoom {
                 .alignment(Alignment::Left)
                 .position(block::Position::Top),
             )
+            .title(
+                block::Title::from(Span::styled(
+                    "Change tabs using ↑ and ↓",
+                    Style::default().fg(Color::Yellow),
+                ))
+                .alignment(Alignment::Left)
+                .position(block::Position::Bottom),
+            )
+            .title(
+                block::Title::from(Span::styled(
+                    "Confirm change using <Enter>",
+                    Style::default().fg(Color::Yellow),
+                ))
+                .alignment(Alignment::Right)
+                .position(block::Position::Bottom),
+            )
             .borders(Borders::ALL)
             .style(Style::default());
 
@@ -63,6 +79,13 @@ impl SelectRoom {
         client: &mut Client,
         selected_tab: &mut SelectedTab,
     ) -> Result<(), Box<dyn Error>> {
+        // If we are on this tab and there are no connected peers, navigate back to the chat tab
+        let app = APP.lock().unwrap();
+        if app.num_connected_peers == 0 {
+            *selected_tab = SelectedTab::Chat;
+        }
+        drop(app);
+
         match key.code {
             // Changing room
             KeyCode::Up => {
