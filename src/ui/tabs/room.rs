@@ -3,6 +3,7 @@ use crate::network::RequestType;
 use crate::ui::commands::Commands;
 use crate::ui::cursor::Cursor;
 
+use libp2p::gossipsub::PublishError;
 use ratatui::{
     crossterm::event::{KeyCode, KeyEvent},
     prelude::*,
@@ -63,7 +64,10 @@ impl Room {
         let visible_area_height = messages_area.height as usize; // Height of the message area in rows, usize
 
         // Scroll to keep up with messages
-        if (total_message_height >= visible_area_height - 3) && self.auto_scroll {
+        if ((total_message_height >= visible_area_height - 3) && self.auto_scroll)
+            || (self.vertical_scroll.saturating_add(visible_area_height) > total_message_height
+                && self.auto_scroll)
+        {
             self.vertical_scroll = total_message_height.saturating_sub(visible_area_height - 3);
             self.vertical_scroll_state = self.vertical_scroll_state.position(self.vertical_scroll);
         }
@@ -79,6 +83,14 @@ impl Room {
                                 .fg(Color::Yellow),
                         ))
                         .alignment(Alignment::Left)
+                        .position(block::Position::Top),
+                    )
+                    .title(
+                        block::Title::from(Span::styled(
+                            "Press <Tab> to swap tabs",
+                            Style::default().fg(Color::Yellow),
+                        ))
+                        .alignment(Alignment::Right)
                         .position(block::Position::Top),
                     )
                     .title(
@@ -170,7 +182,23 @@ impl Room {
                     let _ = match self.submit_message(client).await {
                         Ok(_) => {}
                         Err(e) => {
-                            logger::error!("Unhandled error when submitting message: {:?}", e);
+                            if let Some(publish_error) = e.downcast_ref::<PublishError>() {
+                                match publish_error {
+                                    PublishError::InsufficientPeers => {
+                                        let mut app = APP.lock().unwrap();
+                                        let topic_str = app.topic.clone().to_string();
+                                        app.add_message(MessageType::Error, "Unable to send message as there are no peers in this room.".to_string(), Some(&topic_str));
+                                    }
+                                    _ => {
+                                        logger::error!(
+                                            "Unhandled publish error when submitting message: {:?}",
+                                            e
+                                        );
+                                    }
+                                }
+                            } else {
+                                logger::error!("Unhandled error when submitting message: {:?}", e);
+                            }
                         }
                     };
                 }
@@ -214,41 +242,49 @@ impl Room {
 
     async fn submit_message(&mut self, client: &mut Client) -> Result<(), Box<dyn Error + Send>> {
         // When we push a message we want to include our nickname, so add it manually.
-        let mut app = APP.lock().unwrap();
+        let app = APP.lock().unwrap();
         let nickname = app.nickname.clone();
         let topic = app.topic.clone();
         let message = self.input.clone();
         let nickname_message = format!("{}: {}", nickname, self.input.clone());
+        let connected_peer = app.connected_peer.clone();
+        let connected = app.connected;
 
         if app.num_connected_peers == 0 {
             return Ok(());
-        }
-
-        if app.connected {
-            client
-                .send_request(
-                    app.connected_peer.unwrap(),
-                    RequestType::Message,
-                    Some(message.clone()),
-                    None,
-                )
-                .await?;
-            app.add_message(MessageType::Message, nickname_message, None);
-        } else {
-            client
-                .publish_message(message.clone(), topic.clone())
-                .await?;
-            app.add_message(
-                MessageType::Message,
-                nickname_message,
-                Some(&topic.to_string()),
-            );
         }
 
         drop(app);
 
         self.input.clear();
         self.cursor.reset_cursor();
+
+        if connected {
+            client
+                .send_request(
+                    connected_peer.unwrap(),
+                    RequestType::Message,
+                    Some(message.clone()),
+                    None,
+                )
+                .await?;
+        } else {
+            client
+                .publish_message(message.clone(), topic.clone())
+                .await?;
+        }
+
+        let mut app = APP.lock().unwrap();
+        let topic_str = topic.to_string();
+        let msg_topic = match connected {
+            true => None,
+            false => Some(&topic_str),
+        };
+
+        logger::info!("Adding message");
+
+        app.add_message(MessageType::Message, nickname_message, msg_topic);
+        drop(app);
 
         Ok(())
     }

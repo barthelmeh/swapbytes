@@ -96,7 +96,7 @@ impl Commands {
 
         for command in &self.commands {
             app.add_message(
-                MessageType::Help,
+                MessageType::Info,
                 format!("{:<max_length$}{}", command.command, command.description),
                 topic,
             );

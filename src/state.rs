@@ -75,6 +75,7 @@ impl App {
                 "Peer has connected".to_string(),
                 Some(&topic_str),
             );
+            self.num_connected_peers = 0;
         }
         self.num_connected_peers += 1;
     }
@@ -91,6 +92,8 @@ impl App {
             if self.connected {
                 self.connected = false;
                 self.connected_peer = None;
+                self.requesting_file = false;
+                self.requested_file = None;
             }
 
             self.add_message(
@@ -105,6 +108,8 @@ impl App {
         if self.connected && self.connected_peer.unwrap() == peer_id {
             self.connected = false;
             self.connected_peer = None;
+            self.requested_file = None;
+            self.requesting_file = false;
             self.add_message(
                 MessageType::Error,
                 "Connected peer has left the application.".to_string(),
@@ -302,6 +307,9 @@ impl App {
                         )
                         .await?;
 
+                    self.requesting_file = false;
+                    self.requested_file = None;
+
                     return Ok(());
                 }
             }
@@ -382,6 +390,11 @@ impl App {
         self.add_message(
             MessageType::Info,
             format!("To leave the private message, type \"/leave\""),
+            None,
+        );
+        self.add_message(
+            MessageType::Help,
+            format!("Type \"/help\" to view all available commands"),
             None,
         );
     }

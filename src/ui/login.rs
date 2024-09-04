@@ -188,14 +188,21 @@ impl LoginScreen {
         app.nickname = nickname.clone();
         app.screen = Screen::Chat;
 
+        drop(app);
+
         // Add the nickname to the network
         if let Some(peer_id) = peer_id {
             client.add_nickname(nickname, peer_id).await?;
-            // Create the global room
-            app.add_room(&"Global".to_string(), client).await?;
-        }
 
-        drop(app);
+            // Connect app to global
+            let mut app = APP.lock().unwrap();
+            app.rooms.push("Global".to_string());
+            app.join_room(&"Global".to_string(), client).await?;
+            drop(app);
+
+            // Fetch all rooms
+            client.fetch_rooms().await?;
+        }
 
         self.input.clear();
         Ok(())
