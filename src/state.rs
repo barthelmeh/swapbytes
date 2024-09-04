@@ -28,6 +28,7 @@ pub struct App {
     pub connected: bool,
     pub requested_file: Option<String>,
     pub requesting_file: bool,
+    pub removed_peers: Vec<PeerId>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -62,11 +63,12 @@ impl App {
             connected: false,
             requested_file: None,
             requesting_file: false,
+            removed_peers: vec![],
         }
     }
 
     pub fn add_peer(&mut self) {
-        if self.num_connected_peers == 0 {
+        if self.num_connected_peers <= 0 {
             // If adding a peer after having zero, show message
             let topic_str = self.topic.clone().to_string();
 
@@ -78,12 +80,17 @@ impl App {
             self.num_connected_peers = 0;
         }
         self.num_connected_peers += 1;
+        logger::info!("{}", self.num_connected_peers);
     }
 
     pub fn remove_peer(&mut self, peer_id: PeerId) {
         if self.num_connected_peers == 0 {
             return;
         };
+
+        if self.removed_peers.contains(&peer_id) {
+            return;
+        }
 
         let topic_str = self.topic.clone().to_string();
 
@@ -118,6 +125,7 @@ impl App {
         }
 
         self.num_connected_peers -= 1;
+        self.removed_peers.push(peer_id);
     }
 
     pub fn add_message(
