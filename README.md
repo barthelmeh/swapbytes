@@ -30,7 +30,7 @@ _Note that when using a command with an argument, you do not need to provide the
 Below is a list of the available commands:
 
 **/help** - _View a list of all available commands_  
-**/list** - _List all known users that have sent a message_
+**/list** - _List all known users that have sent a message_  
 **/create_room [room]** - _Create a new room and join it_  
 **/connect [nickname]** - _Invite a peer to share files and chat privately_  
 **/request [filename]** - _Request a file in a private messaging session_  
